@@ -1,0 +1,5 @@
+/target/
+*.swp
+*.swo
+*.lock
+community_plugins.json

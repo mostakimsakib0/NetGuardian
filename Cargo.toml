@@ -1,0 +1,24 @@
+[package]
+name = "netguardian"
+version = "0.1.0"
+edition = "2021"
+description = "Intelligent Network Resilience Middleware for Linux"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+hickory-resolver = { version = "0.26", features = ["system-config"] }
+sysinfo = "0.33"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+thiserror = "2"
+fastrand = "2"
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
