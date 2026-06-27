@@ -248,6 +248,37 @@ impl MetricsEngine {
             total_operations: inner.operations.len() as u64,
         }
     }
+    pub fn format_prometheus(&self) -> String {
+        let s = self.snapshot();
+        let mut out = String::new();
+        out.push_str("# HELP netguardian_uptime_seconds Total uptime\n");
+        out.push_str("# TYPE netguardian_uptime_seconds gauge\n");
+        out.push_str(&format!("netguardian_uptime_seconds {}\n", s.uptime_secs));
+        out.push_str("# HELP netguardian_downtime_seconds Total downtime\n");
+        out.push_str(&format!("netguardian_downtime_seconds {}\n", s.downtime_secs));
+        out.push_str("# HELP netguardian_retries_total Total retries\n");
+        out.push_str(&format!("netguardian_retries_total {}\n", s.total_retries));
+        out.push_str("# HELP netguardian_reconnects_total Total reconnects\n");
+        out.push_str(&format!("netguardian_reconnects_total {}\n", s.reconnect_count));
+        out.push_str("# HELP netguardian_operations_failed_total Failed operations\n");
+        out.push_str(&format!("netguardian_operations_failed_total {}\n", s.failed_operations));
+        out.push_str("# HELP netguardian_operations_success_total Successful operations\n");
+        out.push_str(&format!("netguardian_operations_success_total {}\n", s.successful_operations));
+        out.push_str("# HELP netguardian_latency_ms Average latency\n");
+        out.push_str("# TYPE netguardian_latency_ms gauge\n");
+        out.push_str(&format!("netguardian_latency_ms {}\n", s.avg_latency_ms));
+        out.push_str("# HELP netguardian_packet_loss_pct Average packet loss\n");
+        out.push_str(&format!("netguardian_packet_loss_pct {}\n", s.avg_packet_loss_pct));
+        out.push_str("# HELP netguardian_bandwidth_rx_bytes RX bandwidth\n");
+        out.push_str(&format!("netguardian_bandwidth_rx_bytes {}\n", s.bandwidth_rx_bytes));
+        out.push_str("# HELP netguardian_bandwidth_tx_bytes TX bandwidth\n");
+        out.push_str(&format!("netguardian_bandwidth_tx_bytes {}\n", s.bandwidth_tx_bytes));
+        out.push_str("# HELP netguardian_session_count Session count\n");
+        out.push_str(&format!("netguardian_session_count {}\n", s.session_count));
+        out.push_str("# HELP netguardian_total_operations Total operations\n");
+        out.push_str(&format!("netguardian_total_operations {}\n", s.total_operations));
+        out
+    }
 }
 
 impl Default for MetricsEngine {

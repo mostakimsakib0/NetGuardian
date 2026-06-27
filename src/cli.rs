@@ -35,14 +35,45 @@ pub enum Commands {
     /// Run diagnostics
     Doctor,
 
-    /// Show network metrics
-    Metrics,
+    /// Show network metrics (use --format prometheus for Prometheus output)
+    Metrics {
+        /// Output format: json or prometheus
+        #[arg(short, long, default_value_t = String::from("json"))]
+        format: String,
+    },
 
     /// View logs
     Logs,
 
     /// Start the NetGuardian daemon
     Daemon,
+
+    /// Manage running jobs
+    Job {
+        #[command(subcommand)]
+        command: JobCommands,
+    },
+
+    /// Serve Prometheus metrics over HTTP
+    MetricsServe {
+        /// Listen address (e.g. 0.0.0.0:9090)
+        #[arg(short, long, default_value_t = String::from("127.0.0.1:9090"))]
+        listen: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum JobCommands {
+    /// List all jobs
+    List,
+    /// Pause a running job
+    Pause { id: u64 },
+    /// Resume a paused job
+    Resume { id: u64 },
+    /// Cancel a running or paused job
+    Cancel { id: u64 },
+    /// Show job details
+    Info { id: u64 },
 }
 
 #[derive(Subcommand)]

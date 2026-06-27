@@ -1,0 +1,31 @@
+[Unit]
+Description=NetGuardian — Intelligent Network Resilience Middleware
+Documentation=https://github.com/mostakimsakib0/NetGuardian
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/netguardian daemon
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+
+# Paths
+PIDFile=/var/run/netguardian.pid
+RuntimeDirectory=netguardian
+RuntimeDirectoryMode=0755
+StateDirectory=netguardian
+StateDirectoryMode=0755
+CacheDirectory=netguardian
+CacheDirectoryMode=0755
+LogsDirectory=netguardian
+LogsDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

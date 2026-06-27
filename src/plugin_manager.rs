@@ -4,6 +4,46 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum Capability {
+    Resume,
+    Queue,
+    Parallel,
+    Cache,
+    Priority,
+    Retry,
+    Progress,
+    Cancel,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PluginCapabilities {
+    pub caps: Vec<Capability>,
+}
+
+impl PluginCapabilities {
+    pub fn new() -> Self {
+        Self { caps: Vec::new() }
+    }
+
+    pub fn with(mut self, cap: Capability) -> Self {
+        if !self.caps.contains(&cap) {
+            self.caps.push(cap);
+        }
+        self
+    }
+
+    pub fn supports(&self, cap: Capability) -> bool {
+        self.caps.contains(&cap)
+    }
+}
+
+impl Default for PluginCapabilities {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PluginState {
     Loaded,
@@ -28,6 +68,7 @@ pub trait Plugin: Send + Sync {
     fn name(&self) -> &str;
     fn version(&self) -> &str;
     fn description(&self) -> &str;
+    fn capabilities(&self) -> PluginCapabilities;
 
     fn initialize(&mut self) -> PluginResult<()>;
     fn start(&mut self) -> PluginResult<()>;
@@ -42,7 +83,6 @@ pub trait Plugin: Send + Sync {
 pub trait CliPlugin: Plugin {
     fn binary(&self) -> &str;
     fn default_args(&self) -> &[&str];
-    fn supports_resume(&self) -> bool;
 
     fn run(&self, args: &[&str], timeout: Duration) -> PluginResult<CommandOutput>;
 }
@@ -109,6 +149,14 @@ impl Plugin for GitPlugin {
 
     fn description(&self) -> &str {
         "Git protocol support: clone, pull, fetch with resume capability"
+    }
+
+    fn capabilities(&self) -> PluginCapabilities {
+        PluginCapabilities::new()
+            .with(Capability::Resume)
+            .with(Capability::Cancel)
+            .with(Capability::Retry)
+            .with(Capability::Progress)
     }
 
     fn initialize(&mut self) -> PluginResult<()> {
@@ -181,10 +229,6 @@ impl CliPlugin for GitPlugin {
         &[]
     }
 
-    fn supports_resume(&self) -> bool {
-        true
-    }
-
     fn run(&self, args: &[&str], timeout: Duration) -> PluginResult<CommandOutput> {
         execute_command(self.binary(), args, timeout)
     }
@@ -215,6 +259,14 @@ impl Plugin for CurlPlugin {
 
     fn description(&self) -> &str {
         "cURL downloads with retry and resume support"
+    }
+
+    fn capabilities(&self) -> PluginCapabilities {
+        PluginCapabilities::new()
+            .with(Capability::Resume)
+            .with(Capability::Cancel)
+            .with(Capability::Retry)
+            .with(Capability::Progress)
     }
 
     fn initialize(&mut self) -> PluginResult<()> {
@@ -287,10 +339,6 @@ impl CliPlugin for CurlPlugin {
         &["-L", "--connect-timeout", "10"]
     }
 
-    fn supports_resume(&self) -> bool {
-        true
-    }
-
     fn run(&self, args: &[&str], timeout: Duration) -> PluginResult<CommandOutput> {
         let all_args: Vec<&str> = self.default_args().iter().chain(args).copied().collect();
         execute_command(self.binary(), &all_args, timeout)
@@ -322,6 +370,14 @@ impl Plugin for WgetPlugin {
 
     fn description(&self) -> &str {
         "Wget downloads with retry and resume (-c) support"
+    }
+
+    fn capabilities(&self) -> PluginCapabilities {
+        PluginCapabilities::new()
+            .with(Capability::Resume)
+            .with(Capability::Cancel)
+            .with(Capability::Retry)
+            .with(Capability::Progress)
     }
 
     fn initialize(&mut self) -> PluginResult<()> {
@@ -394,10 +450,6 @@ impl CliPlugin for WgetPlugin {
         &["--tries=3", "--timeout=15", "-c"]
     }
 
-    fn supports_resume(&self) -> bool {
-        true
-    }
-
     fn run(&self, args: &[&str], timeout: Duration) -> PluginResult<CommandOutput> {
         let all_args: Vec<&str> = self.default_args().iter().chain(args).copied().collect();
         execute_command(self.binary(), &all_args, timeout)
@@ -429,6 +481,12 @@ impl Plugin for PodmanPlugin {
 
     fn description(&self) -> &str {
         "Podman container management with pull/push retry support"
+    }
+
+    fn capabilities(&self) -> PluginCapabilities {
+        PluginCapabilities::new()
+            .with(Capability::Cancel)
+            .with(Capability::Retry)
     }
 
     fn initialize(&mut self) -> PluginResult<()> {
@@ -501,10 +559,6 @@ impl CliPlugin for PodmanPlugin {
         &[]
     }
 
-    fn supports_resume(&self) -> bool {
-        false
-    }
-
     fn run(&self, args: &[&str], timeout: Duration) -> PluginResult<CommandOutput> {
         execute_command(self.binary(), args, timeout)
     }
@@ -514,12 +568,21 @@ pub type BoxedPlugin = Arc<Mutex<dyn Plugin>>;
 
 pub struct PluginManager {
     plugins: HashMap<String, BoxedPlugin>,
+    discover_paths: Vec<String>,
 }
 
 impl PluginManager {
     pub fn new() -> Self {
         Self {
             plugins: HashMap::new(),
+            discover_paths: Vec::new(),
+        }
+    }
+
+    pub fn with_discovery_paths(paths: Vec<String>) -> Self {
+        Self {
+            plugins: HashMap::new(),
+            discover_paths: paths,
         }
     }
 
@@ -535,8 +598,37 @@ impl PluginManager {
         self.plugins.insert(name.to_string(), plugin);
     }
 
+    pub async fn unload(&mut self, name: &str) -> PluginResult<()> {
+        if let Some(plugin) = self.plugins.remove(name) {
+            let mut locked = plugin.lock().await;
+            locked.shutdown()
+        } else {
+            Err(PluginError::NotInitialized)
+        }
+    }
+
+    pub fn discover_builtin(&mut self) {
+        // Check which CLI tools are available on the system
+        let candidates: Vec<(&str, BoxedPlugin)> = vec![
+            ("git", Arc::new(Mutex::new(GitPlugin::new()))),
+            ("curl", Arc::new(Mutex::new(CurlPlugin::new()))),
+            ("wget", Arc::new(Mutex::new(WgetPlugin::new()))),
+            ("podman", Arc::new(Mutex::new(PodmanPlugin::new()))),
+        ];
+
+        for (name, plugin) in candidates {
+            if !self.plugins.contains_key(name) {
+                self.plugins.insert(name.to_string(), plugin);
+            }
+        }
+    }
+
     pub async fn get(&self, name: &str) -> Option<BoxedPlugin> {
         self.plugins.get(name).cloned()
+    }
+
+    pub async fn has(&self, name: &str) -> bool {
+        self.plugins.contains_key(name)
     }
 
     pub async fn list(&self) -> Vec<PluginInfo> {
@@ -552,6 +644,7 @@ impl PluginManager {
                 name: locked.name().to_string(),
                 version: locked.version().to_string(),
                 description: locked.description().to_string(),
+                capabilities: locked.capabilities(),
                 state,
                 healthy,
             });
@@ -577,20 +670,26 @@ impl PluginManager {
         results
     }
 
+    /// Pause only plugins that support the Pause capability
     pub async fn pause_all(&self) -> Vec<PluginResult<()>> {
         let mut results = Vec::new();
         for (_, plugin) in &self.plugins {
             let mut locked = plugin.lock().await;
-            results.push(locked.pause());
+            if locked.capabilities().supports(Capability::Cancel) {
+                results.push(locked.pause());
+            }
         }
         results
     }
 
+    /// Resume only plugins that support Resume capability
     pub async fn resume_all(&self) -> Vec<PluginResult<()>> {
         let mut results = Vec::new();
         for (_, plugin) in &self.plugins {
             let mut locked = plugin.lock().await;
-            results.push(locked.resume());
+            if locked.capabilities().supports(Capability::Resume) {
+                results.push(locked.resume());
+            }
         }
         results
     }
@@ -602,6 +701,38 @@ impl PluginManager {
             results.push(locked.shutdown());
         }
         results
+    }
+
+    /// Retry only plugins that support Retry capability
+    pub async fn retry_plugin(&self, name: &str) -> PluginResult<()> {
+        if let Some(plugin) = self.plugins.get(name) {
+            let locked = plugin.lock().await;
+            if locked.capabilities().supports(Capability::Retry) {
+                drop(locked);
+                let mut locked = plugin.lock().await;
+                locked.retry()
+            } else {
+                Err(PluginError::UnsupportedOperation("retry not supported by this plugin".into()))
+            }
+        } else {
+            Err(PluginError::NotInitialized)
+        }
+    }
+
+    /// Cancel only if plugin supports Cancel capability
+    pub async fn cancel_plugin(&self, name: &str) -> PluginResult<()> {
+        if let Some(plugin) = self.plugins.get(name) {
+            let locked = plugin.lock().await;
+            if locked.capabilities().supports(Capability::Cancel) {
+                drop(locked);
+                let mut locked = plugin.lock().await;
+                locked.cancel()
+            } else {
+                Err(PluginError::UnsupportedOperation("cancel not supported by this plugin".into()))
+            }
+        } else {
+            Err(PluginError::NotInitialized)
+        }
     }
 
     pub fn count(&self) -> usize {
@@ -620,6 +751,7 @@ pub struct PluginInfo {
     pub name: String,
     pub version: String,
     pub description: String,
+    pub capabilities: PluginCapabilities,
     pub state: PluginState,
     pub healthy: bool,
 }
@@ -754,21 +886,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_cli_plugin_trait() {
+    async fn test_cli_plugin_capabilities() {
         let git = GitPlugin::new();
         assert_eq!(git.binary(), "git");
-        assert!(git.supports_resume());
+        assert!(git.capabilities().supports(Capability::Resume));
+        assert!(git.capabilities().supports(Capability::Cancel));
+        assert!(git.capabilities().supports(Capability::Retry));
+        assert!(git.capabilities().supports(Capability::Progress));
 
         let curl = CurlPlugin::new();
         assert_eq!(curl.binary(), "curl");
-        assert!(curl.supports_resume());
+        assert!(curl.capabilities().supports(Capability::Resume));
 
         let wget = WgetPlugin::new();
         assert_eq!(wget.binary(), "wget");
-        assert!(wget.supports_resume());
+        assert!(wget.capabilities().supports(Capability::Resume));
 
         let podman = PodmanPlugin::new();
         assert_eq!(podman.binary(), "podman");
-        assert!(!podman.supports_resume());
+        assert!(!podman.capabilities().supports(Capability::Resume));
+        assert!(podman.capabilities().supports(Capability::Cancel));
+        assert!(podman.capabilities().supports(Capability::Retry));
     }
 }

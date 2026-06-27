@@ -12,6 +12,13 @@ use crate::plugin_manager::{
 
 const DEFAULT_INDEX_URL: &str = "https://raw.githubusercontent.com/netguardian/plugins/main/index.json";
 const STORAGE_FILE: &str = "community_plugins.json";
+const CURRENT_API_VERSION: &str = "0.1.0";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompatibilityInfo {
+    pub api_version: String,
+    pub min_api_version: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommunityPluginManifest {
@@ -26,6 +33,12 @@ pub struct CommunityPluginManifest {
     pub default_args: Vec<String>,
     pub supports_resume: bool,
     pub homepage: Option<String>,
+    #[serde(default)]
+    pub compatibility: Option<CompatibilityInfo>,
+    #[serde(default)]
+    pub checksum: Option<String>,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +72,16 @@ impl Plugin for CommunityPlugin {
 
     fn description(&self) -> &str {
         &self.manifest.description
+    }
+
+    fn capabilities(&self) -> crate::plugin_manager::PluginCapabilities {
+        let mut caps = crate::plugin_manager::PluginCapabilities::new()
+            .with(crate::plugin_manager::Capability::Cancel)
+            .with(crate::plugin_manager::Capability::Retry);
+        if self.manifest.supports_resume {
+            caps = caps.with(crate::plugin_manager::Capability::Resume);
+        }
+        caps
     }
 
     fn initialize(&mut self) -> PluginResult<()> {
@@ -129,10 +152,6 @@ impl CliPlugin for CommunityPlugin {
 
     fn default_args(&self) -> &[&str] {
         &[]
-    }
-
-    fn supports_resume(&self) -> bool {
-        self.manifest.supports_resume
     }
 
     fn run(&self, args: &[&str], timeout: Duration) -> PluginResult<CommandOutput> {
@@ -210,6 +229,9 @@ impl CommunityPluginRegistry {
             .find(|m| m.name == name)
             .cloned()
             .ok_or_else(|| format!("plugin '{}' not found in community index", name))?;
+
+        manifest.is_compatible()?;
+
         let entry = InstalledPluginEntry {
             manifest: manifest.clone(),
             installed_at: chrono::Utc::now().to_rfc3339(),
@@ -287,6 +309,44 @@ impl CommunityPluginRegistry {
     }
 }
 
+impl CommunityPluginManifest {
+    pub fn is_compatible(&self) -> Result<(), String> {
+        let compat = match &self.compatibility {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+
+        // Check if we meet the minimum API version the plugin requires
+        if version_lt(CURRENT_API_VERSION, &compat.min_api_version) {
+            return Err(format!(
+                "plugin '{}' requires API version >= {}, but current is {}",
+                self.name, compat.min_api_version, CURRENT_API_VERSION
+            ));
+        }
+
+        // Check if our API version is within what the plugin supports
+        if version_lt(&compat.api_version, CURRENT_API_VERSION) {
+            return Err(format!(
+                "plugin '{}' only supports API version <= {}, but current is {}",
+                self.name, compat.api_version, CURRENT_API_VERSION
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+fn version_lt(a: &str, b: &str) -> bool {
+    let a_parts: Vec<u32> = a.split('.').filter_map(|s| s.parse().ok()).collect();
+    let b_parts: Vec<u32> = b.split('.').filter_map(|s| s.parse().ok()).collect();
+    for (av, bv) in a_parts.iter().zip(b_parts.iter()) {
+        if av != bv {
+            return av < bv;
+        }
+    }
+    a_parts.len() < b_parts.len()
+}
+
 impl Default for CommunityPluginRegistry {
     fn default() -> Self {
         Self::new()
@@ -307,6 +367,9 @@ fn builtin_index() -> Vec<CommunityPluginManifest> {
             default_args: vec!["-avz".into(), "--progress".into(), "--partial".into()],
             supports_resume: true,
             homepage: Some("https://rsync.samba.org".into()),
+            compatibility: Some(CompatibilityInfo { api_version: "0.1.0".into(), min_api_version: "0.1.0".into() }),
+            checksum: None,
+            dependencies: vec![],
         },
         CommunityPluginManifest {
             name: "docker".into(),
@@ -320,6 +383,9 @@ fn builtin_index() -> Vec<CommunityPluginManifest> {
             default_args: vec!["--log-level".into(), "warn".into()],
             supports_resume: false,
             homepage: Some("https://docker.com".into()),
+            compatibility: Some(CompatibilityInfo { api_version: "0.1.0".into(), min_api_version: "0.1.0".into() }),
+            checksum: None,
+            dependencies: vec![],
         },
         CommunityPluginManifest {
             name: "pip".into(),
@@ -333,6 +399,9 @@ fn builtin_index() -> Vec<CommunityPluginManifest> {
             default_args: vec!["--timeout".into(), "30".into()],
             supports_resume: false,
             homepage: Some("https://pip.pypa.io".into()),
+            compatibility: Some(CompatibilityInfo { api_version: "0.1.0".into(), min_api_version: "0.1.0".into() }),
+            checksum: None,
+            dependencies: vec![],
         },
         CommunityPluginManifest {
             name: "npm".into(),
@@ -346,6 +415,9 @@ fn builtin_index() -> Vec<CommunityPluginManifest> {
             default_args: vec!["--loglevel".into(), "warn".into()],
             supports_resume: false,
             homepage: Some("https://npmjs.com".into()),
+            compatibility: Some(CompatibilityInfo { api_version: "0.1.0".into(), min_api_version: "0.1.0".into() }),
+            checksum: None,
+            dependencies: vec![],
         },
         CommunityPluginManifest {
             name: "apt".into(),
@@ -359,6 +431,9 @@ fn builtin_index() -> Vec<CommunityPluginManifest> {
             default_args: vec!["--option".into(), "Acquire::Retries=3".into()],
             supports_resume: false,
             homepage: None,
+            compatibility: Some(CompatibilityInfo { api_version: "0.1.0".into(), min_api_version: "0.1.0".into() }),
+            checksum: None,
+            dependencies: vec![],
         },
         CommunityPluginManifest {
             name: "ffmpeg".into(),
@@ -372,6 +447,9 @@ fn builtin_index() -> Vec<CommunityPluginManifest> {
             default_args: vec!["-y".into(), "-stats".into()],
             supports_resume: true,
             homepage: Some("https://ffmpeg.org".into()),
+            compatibility: Some(CompatibilityInfo { api_version: "0.1.0".into(), min_api_version: "0.1.0".into() }),
+            checksum: None,
+            dependencies: vec![],
         },
         CommunityPluginManifest {
             name: "ssh".into(),
@@ -385,6 +463,9 @@ fn builtin_index() -> Vec<CommunityPluginManifest> {
             default_args: vec!["-o".into(), "ConnectTimeout=10".into(), "-o".into(), "ServerAliveInterval=5".into()],
             supports_resume: false,
             homepage: Some("https://openssh.com".into()),
+            compatibility: Some(CompatibilityInfo { api_version: "0.1.0".into(), min_api_version: "0.1.0".into() }),
+            checksum: None,
+            dependencies: vec![],
         },
         CommunityPluginManifest {
             name: "ansible".into(),
@@ -398,6 +479,9 @@ fn builtin_index() -> Vec<CommunityPluginManifest> {
             default_args: vec!["--retry-files-enabled".into(), "no".into()],
             supports_resume: false,
             homepage: Some("https://ansible.com".into()),
+            compatibility: Some(CompatibilityInfo { api_version: "0.1.0".into(), min_api_version: "0.1.0".into() }),
+            checksum: None,
+            dependencies: vec![],
         },
     ]
 }
@@ -542,6 +626,9 @@ mod tests {
             default_args: vec!["hello".into()],
             supports_resume: false,
             homepage: None,
+            compatibility: None,
+            checksum: None,
+            dependencies: vec![],
         };
 
         let mut plugin = CommunityPlugin::new(manifest);
@@ -574,6 +661,9 @@ mod tests {
             default_args: vec![],
             supports_resume: false,
             homepage: None,
+            compatibility: None,
+            checksum: None,
+            dependencies: vec![],
         };
         let mut plugin = CommunityPlugin::new(manifest);
         plugin.initialize().unwrap();
@@ -596,10 +686,13 @@ mod tests {
             default_args: vec!["-n".into(), "hello".into()],
             supports_resume: true,
             homepage: None,
+            compatibility: None,
+            checksum: None,
+            dependencies: vec![],
         };
         let plugin = CommunityPlugin::new(manifest);
         assert_eq!(plugin.binary(), "echo");
-        assert!(plugin.supports_resume());
+        assert!(plugin.capabilities().supports(crate::plugin_manager::Capability::Resume));
     }
 
     #[tokio::test]
@@ -616,6 +709,9 @@ mod tests {
             default_args: vec![],
             supports_resume: false,
             homepage: None,
+            compatibility: None,
+            checksum: None,
+            dependencies: vec![],
         };
         let mut pm = PluginManager::new();
         pm.register_named("custom", Arc::new(Mutex::new(CommunityPlugin::new(manifest))));
@@ -640,6 +736,9 @@ mod tests {
             default_args: vec![],
             supports_resume: false,
             homepage: None,
+            compatibility: None,
+            checksum: None,
+            dependencies: vec![],
         };
         let mut pm = PluginManager::new();
         pm.register_named("test-cp", Arc::new(Mutex::new(CommunityPlugin::new(manifest))));
@@ -712,6 +811,9 @@ mod tests {
             default_args: vec!["--flag".into(), "value".into()],
             supports_resume: true,
             homepage: Some("https://example.com".into()),
+            compatibility: Some(CompatibilityInfo { api_version: "0.1.0".into(), min_api_version: "0.1.0".into() }),
+            checksum: Some("sha256:abc123".into()),
+            dependencies: vec!["openssh".into()],
         };
 
         let json = serde_json::to_string_pretty(&manifest).unwrap();
@@ -721,5 +823,7 @@ mod tests {
         assert_eq!(deserialized.version, "1.0.0");
         assert_eq!(deserialized.tags, vec!["tag1", "tag2"]);
         assert!(deserialized.supports_resume);
+        assert_eq!(deserialized.checksum, Some("sha256:abc123".into()));
+        assert_eq!(deserialized.dependencies, vec!["openssh".into()]);
     }
 }
